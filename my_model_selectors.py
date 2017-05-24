@@ -77,7 +77,23 @@ class SelectorBIC(ModelSelector):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection based on BIC scores
-        raise NotImplementedError
+        log_N = np.log(len(self.lengths))
+        min_bic = float('inf')
+        best_model = None
+
+        for num_hidden_states in range(self.min_n_components, self.max_n_components+1):
+            try:
+                model = self.base_model(num_hidden_states)
+                log_L = model.score(self.X, self.lengths)
+                p = model.startprob_.size + model.transmat_.size\
+                    + model.means_.size + model.covars_.diagonal().size
+                bic = -2 * log_L + p * log_N
+                if bic < min_bic:
+                    best_model = model
+                    min_bic = bic
+            except:
+                pass
+        return best_model
 
 
 class SelectorDIC(ModelSelector):
@@ -93,7 +109,35 @@ class SelectorDIC(ModelSelector):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        best_dic = float("-inf")
+        best_model = None
+        for num_hidden_states in range(self.min_n_components, self.max_n_components+1):
+            try:
+                model = self.base_model(num_hidden_states)
+                log_L = model.score(self.X, self.lengths)
+
+                partial_sum = 0
+                i = 0
+                for word in self.words:
+                    if word != self.this_word:
+                        X, lengths = self.hwords[word]
+                        try:
+                            partial_sum += model.score(X, lengths)
+                            i += 1
+                        except:
+                            pass
+                if i > 0:
+                    partial_mean = partial_sum / i
+                else:
+                    partial_mean = 0
+
+                bic = log_L - partial_mean
+                best_dic, best_model = max((best_dic, best_model),
+                                           (bic, model))
+            except:
+                pass
+
+        return best_model
 
 
 class SelectorCV(ModelSelector):
@@ -102,7 +146,51 @@ class SelectorCV(ModelSelector):
     '''
 
     def select(self):
-        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        # warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection using CV
-        raise NotImplementedError
+        max_mean_log_L = float('-inf')
+        best_num_hidden_states = None
+        n_splits = min(3, len(self.lengths))
+
+        for num_hidden_states in range(self.min_n_components, self.max_n_components+1):
+            sum_log_L = 0
+            if n_splits < 2:
+                try:
+                    self.X, self.lengths = self.hwords[self.this_word]
+                    model = self.base_model(num_hidden_states)
+                    max_mean_log_L = model.score(self.X, self.lengths)
+                except:
+                    pass
+            else:
+                split_method = KFold(n_splits=n_splits)
+                i = 0
+                for cv_train_idx, cv_test_idx in split_method.split(
+                        self.sequences):
+                    try:
+                        self.X, self.lengths = combine_sequences(cv_train_idx,
+                                                                 self.sequences)
+                        X_test, lengths_test = combine_sequences(cv_test_idx,
+                                                                 self.sequences)
+
+                        model = self.base_model(num_hidden_states)
+
+                        sum_log_L = + model.score(self.X, self.lengths)
+                        i += 1
+                    except:
+                        pass
+                if i > 0:
+                    mean_log_L = sum_log_L / i
+                else:
+                    mean_log_L = 0
+                if mean_log_L > max_mean_log_L:
+                    max_mean_log_L = mean_log_L
+                    best_num_hidden_states = num_hidden_states
+
+        self.X, self.lengths = self.hwords[self.this_word]
+        if best_num_hidden_states is None:
+            return self.base_model(best_num_hidden_states)
+        else:
+            return self.base_model(self.n_constant)
+
+
